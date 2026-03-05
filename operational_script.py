@@ -1,8 +1,8 @@
 import json
 import logging
-from typing import Dict, Any, List
+from typing import Dict
 import requests
-from datetime import datetime
+from typing import Iterator, Tuple
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -11,43 +11,46 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 API_ENDPOINT = "https://api.streampro.dummy/v1/users/last-watched"
 EVENTS_FILE_PATH = "data/events.json"
 
-def get_last_watched_videos(file_path: str) -> Dict[str, str]:
+def _event_generator(file_path: str) -> Iterator[Tuple[str, str, str]]:
     """
-    Parses the JSONL events file to find the most recently watched video for each user.
+    Generator that yields (user_id, video_id, timestamp_str) from valid events.
     """
-    user_latest_video = {}
-    user_latest_timestamp = {}
-
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             for line in f:
                 if not line.strip():
                     continue
-                
+
                 try:
                     event = json.loads(line)
+                    
+                    event_name = event.get('event_name')
+                    if event_name not in ('watch_time', 'like', 'heart', 'session_start'):
+                        continue
+                        
                     user_id = event.get('user_id')
                     video_id = event.get('video_id')
                     timestamp_str = event.get('timestamp')
-                    event_name = event.get('event_name')
-                    
-                    # We are interested in events that have a video_id tied to a user
-                    if user_id and video_id and timestamp_str and event_name in ('watch_time', 'like', 'heart', 'session_start'):
-                        timestamp = datetime.fromisoformat(timestamp_str)
-                        
-                        # Update if this is the first time we see the user OR the current event is newer
-                        if user_id not in user_latest_timestamp or timestamp > user_latest_timestamp[user_id]:
-                            user_latest_timestamp[user_id] = timestamp
-                            user_latest_video[user_id] = video_id
+
+                    if user_id and video_id and timestamp_str:
+                        yield user_id, video_id, timestamp_str
                             
                 except json.JSONDecodeError:
                     logging.warning(f"Error parsing JSON line: {line.strip()[:50]}...")
-                except ValueError as e:
-                    logging.warning(f"Error parsing timestamp: {e}")
-
     except FileNotFoundError:
         logging.error(f"File not found: {file_path}. Ensure it is present in the working directory.")
-        return {}
+
+def get_last_watched_videos(file_path: str) -> Dict[str, str]:
+    """
+    Consumes the event generator to find the most recently watched video for each user.
+    """
+    user_latest_video = {}
+    user_latest_timestamp = {}
+
+    for user_id, video_id, timestamp_str in _event_generator(file_path):
+        if user_id not in user_latest_timestamp or timestamp_str > user_latest_timestamp[user_id]:
+            user_latest_timestamp[user_id] = timestamp_str
+            user_latest_video[user_id] = video_id
 
     return user_latest_video
 
@@ -82,6 +85,7 @@ def main():
     logging.info(f"Reading events from {EVENTS_FILE_PATH}...")
     
     last_watched_map = get_last_watched_videos(EVENTS_FILE_PATH)
+    print(last_watched_map)
     
     if not last_watched_map:
         logging.warning("No valid video watch events found.")
